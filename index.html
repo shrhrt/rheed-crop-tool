@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RHEED画像 切り抜きツール</title>
+<style>
+  :root {
+    --bg: #1f2224;
+    --panel: #2a2e31;
+    --panel-2: #33383c;
+    --line: #444a4f;
+    --text: #e6e4df;
+    --muted: #9aa0a4;
+    --accent: #7fd1a8;      /* 蛍光板のグリーン */
+    --accent-ink: #0f2a1d;
+    --warn: #e0a458;
+    --danger: #e07a6e;
+    --radius: 6px;
+    font-family: "Hiragino Sans", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.5;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    overflow: hidden;
+  }
+  button, input, select { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---------- header ---------- */
+  header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+  }
+  header h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: .02em; }
+  header .spacer { flex: 1; }
+  .btn {
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 6px 12px;
+    cursor: pointer;
+  }
+  .btn:hover { border-color: var(--muted); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.primary {
+    background: var(--accent); color: var(--accent-ink);
+    border-color: var(--accent); font-weight: 600;
+  }
+  .btn.primary:hover { filter: brightness(1.08); }
+
+  /* ---------- main layout ---------- */
+  main {
+    display: grid;
+    grid-template-columns: 230px minmax(0, 1fr) 300px;
+    min-height: 0;
+  }
+  aside {
+    background: var(--panel);
+    overflow-y: auto;
+    min-height: 0;
+  }
+  #listPane { border-right: 1px solid var(--line); }
+  #ctrlPane { border-left: 1px solid var(--line); padding: 14px; }
+
+  /* ---------- file list ---------- */
+  #list { list-style: none; margin: 0; padding: 6px; }
+  #list li {
+    display: grid; grid-template-columns: 56px 1fr; gap: 10px; align-items: center;
+    padding: 6px; border-radius: var(--radius); cursor: pointer;
+    border: 1px solid transparent;
+  }
+  #list li:hover { background: var(--panel-2); }
+  #list li.active { background: var(--panel-2); border-color: var(--accent); }
+  #list img { width: 56px; height: 42px; object-fit: cover; border-radius: 3px; background: #000; }
+  #list .nm { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #list .st { font-size: 11px; color: var(--muted); }
+  #list li.set .st { color: var(--accent); }
+  #list li.done .st { color: var(--accent); }
+  #list li.err .st { color: var(--danger); }
+
+  /* ---------- stage ---------- */
+  #stage {
+    position: relative; min-width: 0; min-height: 0;
+    display: grid; grid-template-rows: auto 1fr;
+    background: #15181a;
+  }
+  #stageBar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px; background: var(--panel);
+    border-bottom: 1px solid var(--line);
+  }
+  #stageBar .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #canvasWrap {
+    position: relative; min-height: 0; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #view { display: block; cursor: grab; touch-action: none; }
+  #view.dragging { cursor: grabbing; }
+
+  #drop {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+    text-align: center; padding: 24px; color: var(--muted);
+    border: 2px dashed var(--line); margin: 16px; border-radius: 10px;
+  }
+  #drop.over { border-color: var(--accent); color: var(--text); }
+  #drop strong { color: var(--text); font-size: 16px; font-weight: 600; }
+  #drop[hidden] { display: none; }
+
+  /* ---------- controls ---------- */
+  fieldset { border: 0; padding: 0; margin: 0 0 18px; }
+  legend { font-weight: 600; padding: 0; margin-bottom: 8px; }
+  .row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 10px; margin-bottom: 8px; }
+  .row label { color: var(--muted); }
+  .row output { font-variant-numeric: tabular-nums; min-width: 3.2em; text-align: right; }
+  .row input[type=range] { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
+  .pair { display: flex; align-items: center; gap: 6px; }
+  input[type=number], input[type=text] {
+    background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 5px 8px; width: 100%;
+  }
+  input[type=number] { width: 84px; font-variant-numeric: tabular-nums; }
+  .check { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; cursor: pointer; }
+  .check input { accent-color: var(--accent); }
+  .hint { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
+  #preview {
+    display: block; width: 100%; background: #000; border-radius: var(--radius);
+    border: 1px solid var(--line); margin-bottom: 6px;
+  }
+  .sep { height: 1px; background: var(--line); margin: 4px 0 16px; border: 0; }
+  .nameBox { display: flex; align-items: center; gap: 6px; }
+  .nameBox span { color: var(--muted); }
+
+  /* ---------- footer ---------- */
+  footer {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; background: var(--panel); border-top: 1px solid var(--line);
+  }
+  #msg { flex: 1; color: var(--muted); min-width: 0; }
+  #msg.ok { color: var(--accent); }
+  #msg.warn { color: var(--warn); }
+  #msg.err { color: var(--danger); }
+
+  @media (max-width: 900px) {
+    main { grid-template-columns: 170px minmax(0,1fr) 250px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>RHEED画像 切り抜きツール</h1>
+  <div class="spacer"></div>
+  <input type="file" id="fileInput" accept="image/*" multiple hidden>
+  <button class="btn" id="addBtn">画像を追加</button>
+  <button class="btn" id="clearBtn" disabled>すべて外す</button>
+</header>
+
+<main>
+  <aside id="listPane" aria-label="画像リスト">
+    <ul id="list"></ul>
+  </aside>
+
+  <section id="stage">
+    <div id="stageBar">
+      <button class="btn" id="prevBtn" disabled title="前の画像 (P / PageUp)">前へ</button>
+      <div class="title" id="curTitle">画像が選ばれていません</div>
+      <button class="btn" id="nextBtn" disabled title="次の画像 (N / PageDown)">次へ</button>
+    </div>
+    <div id="canvasWrap">
+      <canvas id="view"></canvas>
+      <div id="drop">
+        <strong>ここに写真をドロップ</strong>
+        <span>複数枚をまとめて選べます。<br>「画像を追加」からも選択できます。</span>
+      </div>
+    </div>
+  </section>
+
+  <aside id="ctrlPane" aria-label="設定">
+    <fieldset>
+      <legend>切り抜き枠（元画像のピクセル）</legend>
+      <div class="pair">
+        <input type="number" id="fw" min="8" step="1" value="1800" aria-label="幅">
+        <span>×</span>
+        <input type="number" id="fh" min="8" step="1" value="1150" aria-label="高さ">
+        <span>px</span>
+      </div>
+      <p class="hint">枠サイズは全画像で共通です。画像上をクリックするとその位置に枠が移動し、ドラッグや矢印キー（Shiftで10px）で微調整できます。</p>
+      <div class="pair" style="margin-top:8px">
+        <label for="fx" style="color:var(--muted)">位置</label>
+        <input type="number" id="fx" step="1" aria-label="左端X" disabled>
+        <input type="number" id="fy" step="1" aria-label="上端Y" disabled>
+      </div>
+      <div class="pair" style="margin-top:8px; flex-wrap:wrap">
+        <button class="btn" id="copyPrevBtn" disabled title="ショートカット: C">前の画像と同じ位置 (C)</button>
+        <button class="btn" id="applyAllBtn" disabled title="ショートカット: A">未設定の全画像に適用 (A)</button>
+      </div>
+    </fieldset>
+
+    <hr class="sep">
+
+    <fieldset>
+      <legend>色の調整</legend>
+      <label class="check"><input type="checkbox" id="gray"> グレースケールにする</label>
+      <div class="row"><label for="br">明るさ</label><output id="brO">-25</output>
+        <input type="range" id="br" min="-100" max="100" step="1" value="-25"></div>
+      <div class="row"><label for="ct">コントラスト</label><output id="ctO">15</output>
+        <input type="range" id="ct" min="-100" max="100" step="1" value="15"></div>
+      <div class="row"><label for="gm">ガンマ</label><output id="gmO">1.35</output>
+        <input type="range" id="gm" min="0.2" max="3" step="0.05" value="1.35"></div>
+      <button class="btn" id="resetTone" type="button">初期値に戻す</button>
+      <p class="hint">プレビューは現在の枠の中身です。この設定が全画像に適用されます。</p>
+      <canvas id="preview" width="270" height="200"></canvas>
+      <label class="check" style="margin-top:10px"><input type="checkbox" id="indiv"> この画像だけ個別に調整する</label>
+    </fieldset>
+
+    <hr class="sep">
+
+    <fieldset>
+      <legend>ファイル名</legend>
+      <label for="pattern" style="color:var(--muted)">命名規則（全画像）</label>
+      <input type="text" id="pattern" value="{orig}_crop" spellcheck="false">
+      <p class="hint">{orig}=元のファイル名、{n}=リスト順の番号（001から）。</p>
+      <label for="nameOne" style="color:var(--muted);display:block;margin-top:10px">この画像の名前（個別に変更）</label>
+      <div class="nameBox"><input type="text" id="nameOne" spellcheck="false" disabled><span>.png</span></div>
+    </fieldset>
+  </aside>
+</main>
+
+<footer>
+  <div id="msg">写真を読み込んでください。</div>
+  <button class="btn primary" id="runBtn" disabled>実行して保存</button>
+</footer>
+
+<script>
+(() => {
+  'use strict';
+
+  // ---------- state ----------
+  const items = [];          // {id, file, bmp, w, h, url, x, y, set, tone|null, customName|null, status}
+  let cur = -1;
+  let uid = 0;
+  let frameTouched = false;
+
+  const DEFAULT_TONE = { gray: false, br: -25, ct: 15, gm: 1.35 };
+  const DEFAULT_POS = { x: 700, y: 1460 };
+  const tone = { ...DEFAULT_TONE };       // 全画像共通
+
+  // ---------- elements ----------
+  const $ = id => document.getElementById(id);
+  const fileInput = $('fileInput'), listEl = $('list'), view = $('view'), vctx = view.getContext('2d');
+  const drop = $('drop'), wrap = $('canvasWrap');
+  const fw = $('fw'), fh = $('fh'), fx = $('fx'), fy = $('fy');
+  const gray = $('gray'), br = $('br'), ct = $('ct'), gm = $('gm');
+  const indiv = $('indiv'), pattern = $('pattern'), nameOne = $('nameOne');
+  const preview = $('preview'), pctx = preview.getContext('2d');
+  const msg = $('msg'), runBtn = $('runBtn');
+
+  // ---------- helpers ----------
+  const setMsg = (t, cls = '') => { msg.textContent = t; msg.className = cls; };
+  const frameW = () => Math.max(8, Math.round(+fw.value) || 8);
+  const frameH = () => Math.max(8, Math.round(+fh.value) || 8);
+  const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+  const baseName = f => f.name.replace(/\.[^.]+$/, '');
+  const sanitize = s => s.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/\.+$/, '').trim();
+  const toneOf = it => (it && it.tone) ? it.tone : tone;
+
+  function autoName(it, idx) {
+    const n = String(idx + 1).padStart(3, '0');
+    return pattern.value.replace(/\{orig\}/g, baseName(it.file)).replace(/\{n\}/g, n);
+  }
+  function nameOf(it, idx) {
+    const raw = it.customName !== null ? it.customName : autoName(it, idx);
+    return sanitize(raw) || ('image_' + String(idx + 1).padStart(3, '0'));
+  }
+  // 重複しない最終名を一括で決める
+  function finalNames() {
+    const used = new Map();
+    return items.map((it, i) => {
+      let base = nameOf(it, i), name = base, k = 2;
+      while (used.has(name.toLowerCase())) name = base + '_' + (k++);
+      used.set(name.toLowerCase(), true);
+      return name + '.png';
+    });
+  }
+
+  // ---------- 色処理（プレビューと書き出しで共通） ----------
+  // 順序: グレースケール → ガンマ → コントラスト → 明るさ
+  function applyTone(imageData, t) {
+    const d = imageData.data;
+    const lut = new Uint8ClampedArray(256);
+    const c = t.ct * 2.55;
+    const factor = (259 * (c + 255)) / (255 * (259 - c));
+    const add = t.br * 2.55;
+    for (let i = 0; i < 256; i++) {
+      let v = Math.pow(i / 255, 1 / t.gm) * 255;   // ガンマ（>1で明るく）
+      v = factor * (v - 128) + 128;                // コントラスト
+      v = v + add;                                 // 明るさ
+      lut[i] = v;
+    }
+    for (let p = 0; p < d.length; p += 4) {
+      if (t.gray) {
+        const y = Math.round(0.299 * d[p] + 0.587 * d[p + 1] + 0.114 * d[p + 2]);
+        d[p] = d[p + 1] = d[p + 2] = lut[y];
+      } else {
+        d[p] = lut[d[p]]; d[p + 1] = lut[d[p + 1]]; d[p + 2] = lut[d[p + 2]];
+      }
+    }
+    return imageData;
+  }
+
+  function cropToCanvas(it, W, H) {
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const x = c.getContext('2d', { willReadFrequently: true });
+    x.drawImage(it.bmp, it.x, it.y, W, H, 0, 0, W, H);
+    x.putImageData(applyTone(x.getImageData(0, 0, W, H), toneOf(it)), 0, 0);
+    return c;
+  }
+
+  // ---------- 読み込み ----------
+  async function addFiles(fileList) {
+    const files = [...fileList].filter(f => f.type.startsWith('image/'));
+    if (!files.length) { setMsg('画像ファイルが見つかりませんでした。', 'warn'); return; }
+    let failed = 0;
+    for (const f of files) {
+      try {
+        const bmp = await createImageBitmap(f);   // EXIFの向きを反映
+        const it = {
+          id: ++uid, file: f, bmp, w: bmp.width, h: bmp.height,
+          url: URL.createObjectURL(f), x: 0, y: 0, set: false,
+          tone: null, customName: null, status: ''
+        };
+        items.push(it);
+      } catch (e) { failed++; }
+    }
+    renderList();
+    if (cur < 0 && items.length) select(0);
+    else updateUI();
+    setMsg(failed ? `${failed}枚は読み込めませんでした。` : `${files.length}枚を追加しました。各画像で切り抜き位置を決めてください。`, failed ? 'warn' : '');
+  }
+
+  // ---------- リスト ----------
+  function renderList() {
+    const names = finalNames();
+    listEl.innerHTML = '';
+    items.forEach((it, i) => {
+      const li = document.createElement('li');
+      li.className = (i === cur ? 'active ' : '') + (it.status === 'done' ? 'done ' : it.status === 'err' ? 'err ' : it.set ? 'set ' : '');
+      li.innerHTML = '<img alt=""><div><div class="nm"></div><div class="st"></div></div>';
+      li.querySelector('img').src = it.url;
+      li.querySelector('.nm').textContent = names[i];
+      li.querySelector('.nm').title = it.file.name;
+      li.querySelector('.st').textContent =
+        it.status === 'done' ? '保存済み' : it.status === 'err' ? '失敗' : it.set ? '位置を設定済み' : '位置が未設定';
+      li.addEventListener('click', () => select(i));
+      listEl.appendChild(li);
+    });
+    const act = listEl.querySelector('.active');
+    if (act) act.scrollIntoView({ block: 'nearest' });
+  }
+
+  function select(i) {
+    cur = clamp(i, 0, items.length - 1);
+    const it = items[cur];
+    // 未設定なら既定位置に初期配置（まだ「設定済み」にはしない）
+    if (!it.set) {
+      const W = Math.min(frameW(), it.w), H = Math.min(frameH(), it.h);
+      it.x = clamp(DEFAULT_POS.x, 0, it.w - W); it.y = clamp(DEFAULT_POS.y, 0, it.h - H);
+    }
+    renderList(); updateUI(); redraw();
+  }
+
+  // ---------- 描画 ----------
+  let scale = 1, offX = 0, offY = 0;
+
+  function layout() {
+    const r = wrap.getBoundingClientRect();
+    const it = items[cur];
+    if (!it) return;
+    const pad = 16;
+    scale = Math.min((r.width - pad * 2) / it.w, (r.height - pad * 2) / it.h);
+    const dpr = window.devicePixelRatio || 1;
+    view.style.width = Math.floor(it.w * scale) + 'px';
+    view.style.height = Math.floor(it.h * scale) + 'px';
+    view.width = Math.floor(it.w * scale * dpr);
+    view.height = Math.floor(it.h * scale * dpr);
+  }
+
+  function redraw() {
+    const it = items[cur];
+    drop.hidden = items.length > 0;
+    view.style.display = it ? 'block' : 'none';
+    if (!it) return;
+    layout();
+    const dpr = window.devicePixelRatio || 1;
+    const s = scale * dpr;
+    vctx.setTransform(1, 0, 0, 1, 0, 0);
+    vctx.clearRect(0, 0, view.width, view.height);
+    vctx.drawImage(it.bmp, 0, 0, view.width, view.height);
+
+    const W = Math.min(frameW(), it.w), H = Math.min(frameH(), it.h);
+    const x = it.x * s, y = it.y * s, w = W * s, h = H * s;
+    // 枠の外を暗くする
+    vctx.fillStyle = 'rgba(8,10,11,.62)';
+    vctx.fillRect(0, 0, view.width, y);
+    vctx.fillRect(0, y + h, view.width, view.height - y - h);
+    vctx.fillRect(0, y, x, h);
+    vctx.fillRect(x + w, y, view.width - x - w, h);
+    vctx.lineWidth = Math.max(2, dpr * 1.5);
+    vctx.strokeStyle = it.set ? '#7fd1a8' : '#e0a458';
+    vctx.strokeRect(x, y, w, h);
+    drawPreview();
+  }
+
+  function drawPreview() {
+    const it = items[cur];
+    pctx.clearRect(0, 0, preview.width, preview.height);
+    if (!it) return;
+    const W = Math.min(frameW(), it.w), H = Math.min(frameH(), it.h);
+    const c = cropToCanvas(it, W, H);
+    const k = Math.min(preview.width / W, preview.height / H);
+    const dw = W * k, dh = H * k;
+    pctx.imageSmoothingQuality = 'high';
+    pctx.drawImage(c, (preview.width - dw) / 2, (preview.height - dh) / 2, dw, dh);
+  }
+
+  // ---------- UI 同期 ----------
+  function updateUI() {
+    const it = items[cur];
+    const has = !!it;
+    $('prevBtn').disabled = !has || cur === 0;
+    $('nextBtn').disabled = !has || cur === items.length - 1;
+    $('clearBtn').disabled = !has;
+    runBtn.disabled = !has;
+    $('curTitle').textContent = has ? `${cur + 1} / ${items.length}　${it.file.name}（${it.w}×${it.h}px）` : '画像が選ばれていません';
+    fx.disabled = fy.disabled = nameOne.disabled = !has;
+    $('copyPrevBtn').disabled = !has || cur === 0;
+    $('applyAllBtn').disabled = !has || items.length < 2;
+    if (has) {
+      fx.value = it.x; fy.value = it.y;
+      nameOne.value = it.customName !== null ? it.customName : autoName(it, cur);
+      indiv.checked = !!it.tone;
+      const t = toneOf(it);
+      gray.checked = t.gray; br.value = t.br; ct.value = t.ct; gm.value = t.gm;
+      $('brO').textContent = t.br; $('ctO').textContent = t.ct; $('gmO').textContent = (+t.gm).toFixed(2);
+      if (+fw.value > it.w || +fh.value > it.h) setMsg(`枠が画像（${it.w}×${it.h}px）より大きいため、この画像では収まる範囲に切り詰められます。`, 'warn');
+    }
+  }
+
+  function setFramePos(x, y, markSet = true) {
+    const it = items[cur]; if (!it) return;
+    const W = Math.min(frameW(), it.w), H = Math.min(frameH(), it.h);
+    it.x = clamp(Math.round(x), 0, it.w - W);
+    it.y = clamp(Math.round(y), 0, it.h - H);
+    if (markSet) it.set = true;
+    fx.value = it.x; fy.value = it.y;
+    redraw();
+  }
+
+  // 前の画像の枠位置を今の画像にコピー
+  function copyPrevPos() {
+    const it = items[cur], pv = items[cur - 1];
+    if (!it || !pv) return;
+    setFramePos(pv.x, pv.y);
+    renderList();
+    setMsg(`${cur}枚目の枠位置 (${pv.x}, ${pv.y}) をコピーしました。`);
+  }
+
+  // 今の画像の枠位置を、位置未設定の全画像に適用
+  function applyPosToUnset() {
+    const src = items[cur]; if (!src) return;
+    let n = 0;
+    items.forEach(it => {
+      if (it === src || it.set) return;
+      const W = Math.min(frameW(), it.w), H = Math.min(frameH(), it.h);
+      it.x = clamp(src.x, 0, it.w - W); it.y = clamp(src.y, 0, it.h - H);
+      it.set = true; n++;
+    });
+    renderList();
+    setMsg(n ? `位置 (${src.x}, ${src.y}) を未設定の${n}枚に適用しました。` : '位置が未設定の画像はありません。');
+  }
+  $('copyPrevBtn').addEventListener('click', copyPrevPos);
+  $('applyAllBtn').addEventListener('click', applyPosToUnset);
+
+  // ---------- ポインタ操作 ----------
+  let drag = null;
+  const toImg = e => {
+    const r = view.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / scale, y: (e.clientY - r.top) / scale };
+  };
+  view.addEventListener('pointerdown', e => {
+    const it = items[cur]; if (!it) return;
+    const p = toImg(e);
+    const W = Math.min(frameW(), it.w), H = Math.min(frameH(), it.h);
+    const inside = p.x >= it.x && p.x <= it.x + W && p.y >= it.y && p.y <= it.y + H;
+    if (inside) drag = { dx: p.x - it.x, dy: p.y - it.y };
+    else { drag = { dx: W / 2, dy: H / 2 }; setFramePos(p.x - W / 2, p.y - H / 2); }
+    view.setPointerCapture(e.pointerId);
+    view.classList.add('dragging');
+  });
+  view.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const p = toImg(e);
+    setFramePos(p.x - drag.dx, p.y - drag.dy);
+  });
+  const endDrag = () => { if (drag) { drag = null; view.classList.remove('dragging'); renderList(); } };
+  view.addEventListener('pointerup', endDrag);
+  view.addEventListener('pointercancel', endDrag);
+
+  window.addEventListener('keydown', e => {
+    if (!items[cur]) return;
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' && e.target.type !== 'range' && e.target.type !== 'checkbox') return;
+    const step = e.shiftKey ? 10 : 1, it = items[cur];
+    let handled = true;
+    switch (e.key) {
+      case 'ArrowLeft':  setFramePos(it.x - step, it.y); break;
+      case 'ArrowRight': setFramePos(it.x + step, it.y); break;
+      case 'ArrowUp':    setFramePos(it.x, it.y - step); break;
+      case 'ArrowDown':  setFramePos(it.x, it.y + step); break;
+      case 'c': case 'C': copyPrevPos(); break;
+      case 'a': case 'A': applyPosToUnset(); break;
+      case 'n': case 'N': case 'PageDown': select(cur + 1); break;
+      case 'p': case 'P': case 'PageUp':   select(cur - 1); break;
+      default: handled = false;
+    }
+    if (handled) { e.preventDefault(); if (e.key.startsWith('Arrow')) renderList(); }
+  });
+
+  // ---------- 入力イベント ----------
+  [fw, fh].forEach(el => el.addEventListener('input', () => {
+    frameTouched = true;
+    const it = items[cur];
+    if (it) setFramePos(it.x, it.y, false);   // 範囲内に収め直す
+  }));
+  [fx, fy].forEach(el => el.addEventListener('input', () => {
+    const it = items[cur]; if (!it) return;
+    setFramePos(+fx.value || 0, +fy.value || 0);
+    renderList();
+  }));
+
+  function onTone() {
+    const target = (items[cur] && indiv.checked) ? (items[cur].tone || (items[cur].tone = { ...tone })) : tone;
+    target.gray = gray.checked; target.br = +br.value; target.ct = +ct.value; target.gm = +gm.value;
+    $('brO').textContent = br.value; $('ctO').textContent = ct.value; $('gmO').textContent = (+gm.value).toFixed(2);
+    drawPreview();
+  }
+  [gray, br, ct, gm].forEach(el => el.addEventListener('input', onTone));
+  indiv.addEventListener('change', () => {
+    const it = items[cur]; if (!it) return;
+    it.tone = indiv.checked ? { ...tone } : null;
+    updateUI(); drawPreview();
+  });
+  $('resetTone').addEventListener('click', () => {
+    const it = items[cur];
+    const target = (it && it.tone) ? it.tone : tone;
+    Object.assign(target, DEFAULT_TONE);
+    updateUI(); drawPreview();
+  });
+
+  nameOne.addEventListener('input', () => {
+    const it = items[cur]; if (!it) return;
+    it.customName = nameOne.value; renderList();
+  });
+  pattern.addEventListener('input', () => { renderList(); updateUI(); });
+
+  $('prevBtn').addEventListener('click', () => select(cur - 1));
+  $('nextBtn').addEventListener('click', () => select(cur + 1));
+  $('addBtn').addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => { addFiles(fileInput.files); fileInput.value = ''; });
+  $('clearBtn').addEventListener('click', () => {
+    if (!confirm('読み込んだ画像をすべてリストから外します（元のファイルは消えません）。')) return;
+    items.forEach(it => { URL.revokeObjectURL(it.url); it.bmp.close && it.bmp.close(); });
+    items.length = 0; cur = -1; frameTouched = false;
+    renderList(); updateUI(); redraw(); setMsg('写真を読み込んでください。');
+  });
+
+  // ドロップ
+  ['dragenter', 'dragover'].forEach(ev => window.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach(ev => window.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+  window.addEventListener('drop', e => { if (e.dataTransfer && e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
+  window.addEventListener('resize', redraw);
+
+  // ---------- 実行（書き出し） ----------
+  const toBlob = c => new Promise(res => c.toBlob(res, 'image/png'));
+
+  function download(blob, name) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  }
+
+
+  runBtn.addEventListener('click', async () => {
+    const unset = items.map((it, i) => it.set ? -1 : i + 1).filter(n => n > 0);
+    if (unset.length) {
+      const ok = confirm(`切り抜き位置を決めていない画像が${unset.length}枚あります（${unset.slice(0, 8).join(', ')}${unset.length > 8 ? ' …' : ''} 枚目）。\n中央の仮位置のまま保存しますか？\n「キャンセル」で戻って位置を決められます。`);
+      if (!ok) { select(unset[0] - 1); return; }
+    }
+
+    // 保存先: Chrome/Edgeならフォルダを選んで直接保存。それ以外は順次ダウンロード。
+    let dir = null;
+    if (window.showDirectoryPicker) {
+      try { dir = await window.showDirectoryPicker({ mode: 'readwrite' }); }
+      catch (e) { if (e.name === 'AbortError') { setMsg('保存先が選ばれなかったため中止しました。', 'warn'); return; } dir = null; }
+    }
+
+    runBtn.disabled = true;
+    const names = finalNames();
+    let ok = 0, ng = 0;
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      setMsg(`書き出し中… ${i + 1} / ${items.length}`);
+      try {
+        const W = Math.min(frameW(), it.w), H = Math.min(frameH(), it.h);
+        const blob = await toBlob(cropToCanvas(it, W, H));
+        if (dir) {
+          const fh = await dir.getFileHandle(names[i], { create: true });
+          const ws = await fh.createWritable(); await ws.write(blob); await ws.close();
+        } else {
+          download(blob, names[i]);
+          await new Promise(r => setTimeout(r, 250));
+        }
+        it.status = 'done'; ok++;
+      } catch (e) { console.error(e); it.status = 'err'; ng++; }
+    }
+    runBtn.disabled = false;
+    renderList();
+    setMsg(ng ? `${ok}枚を保存、${ng}枚は失敗しました。` : `${ok}枚をPNGで保存しました。${dir ? '' : '（ブラウザのダウンロード先を確認してください）'}`, ng ? 'warn' : 'ok');
+  });
+
+  // 初期表示
+  updateUI(); redraw();
+})();
+</script>
+</body>
+</html>
